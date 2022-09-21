@@ -39,7 +39,9 @@ use std::{
 	path::{Path, PathBuf},
 	sync::Arc,
 };
-use substrate_rpc_client::{rpc_params, ws_client, ChainApi, ClientT, StateApi, WsClient};
+use substrate_rpc_client::{
+	rpc_params, ws_client, BatchRequestBuilder, ChainApi, ClientT, StateApi, WsClient,
+};
 
 type KeyValue = (StorageKey, StorageData);
 type TopKeyValues = Vec<KeyValue>;
@@ -336,11 +338,13 @@ where
 		let mut key_values: Vec<KeyValue> = vec![];
 		let client = self.as_online().rpc_client();
 		for chunk_keys in keys.chunks(BATCH_SIZE) {
-			let batch = chunk_keys
-				.iter()
-				.cloned()
-				.map(|key| ("state_getStorage", rpc_params![key, at]))
-				.collect::<Vec<_>>();
+			let mut batch = BatchRequestBuilder::new();
+
+			for key in chunk_keys.iter() {
+				batch
+					.insert("state_getStorage", rpc_params![key, at])
+					.map_err(|_| "Invalid batch params")?;
+			}
 
 			let values = client.batch_request::<Option<StorageData>>(batch).await.map_err(|e| {
 				log::error!(
@@ -386,11 +390,11 @@ where
 	) -> Result<Vec<KeyValue>, &'static str> {
 		let mut child_kv_inner = vec![];
 		for batch_child_key in child_keys.chunks(BATCH_SIZE) {
-			let batch_request = batch_child_key
-				.iter()
-				.cloned()
-				.map(|key| {
-					(
+			let mut batch_request = BatchRequestBuilder::new();
+
+			for key in batch_child_key {
+				batch_request
+					.insert(
 						"childstate_getStorage",
 						rpc_params![
 							PrefixedStorageKey::new(prefixed_top_key.as_ref().to_vec()),
@@ -398,8 +402,8 @@ where
 							at
 						],
 					)
-				})
-				.collect::<Vec<_>>();
+					.map_err(|_| "Invalid batch params")?;
+			}
 
 			let batch_response = self
 				.as_online()
