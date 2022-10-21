@@ -18,8 +18,6 @@
 //! This module provides a means for executing contracts
 //! represented in wasm.
 
-#[macro_use]
-mod env_def;
 mod code_cache;
 mod prepare;
 mod runtime;
@@ -27,13 +25,13 @@ mod runtime;
 #[cfg(feature = "runtime-benchmarks")]
 pub use crate::wasm::code_cache::reinstrument;
 pub use crate::wasm::{
-	env_def::Environment,
 	prepare::TryInstantiate,
 	runtime::{CallFlags, ReturnCode, Runtime, RuntimeCosts},
 };
 use crate::{
 	exec::{ExecResult, Executable, ExportedFunction, Ext},
 	gas::GasMeter,
+	wasm::runtime::Environment,
 	AccountIdOf, BalanceOf, CodeHash, CodeStorage, CodeVec, Config, Error, RelaxedCodeVec,
 	Schedule,
 };

@@ -32,7 +32,7 @@ use alloc::{
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{quote, quote_spanned, ToTokens};
-use syn::{parse_macro_input, spanned::Spanned, Data, DeriveInput, Ident};
+use syn::{parse_macro_input, spanned::Spanned, Data, DeriveInput, FnArg, Ident};
 
 /// This derives `Debug` for a struct where each field must be of some numeric type.
 /// It interprets each field as its represents some weight and formats it as times so that
@@ -189,6 +189,8 @@ impl HostFn {
 			let msg = format!("Invalid host function definition. {}", msg);
 			syn::Error::new(span, msg)
 		};
+
+		// process attributes
 		let msg = "only #[version(<u8>)] or #[unstable] attribute is allowed.";
 		let span = item.span();
 		let mut attrs = item.attrs.clone();
@@ -211,16 +213,31 @@ impl HostFn {
 			_ => Err(err(span, msg)),
 		}?;
 
+		// process arguments: The first and second arg are treated differently (ctx, memory)
+		// hhey must exist and be `ctx: _` and `memory: _`.
+		let msg = "Every function must start with two inferred parameters: ctx: _ and memory: _";
+		let special_args = item
+			.sig
+			.inputs
+			.iter()
+			.take(2)
+			.enumerate()
+			.map(|(i, arg)| is_valid_special_arg(i, arg))
+			.fold(0u32, |acc, valid| if valid { acc + 1 } else { acc });
+
+		if special_args != 2 {
+			return Err(err(span, msg))
+		}
+
+		// process return type
 		let msg = r#"Should return one of the following:
 				- Result<(), TrapReason>,
 				- Result<ReturnCode, TrapReason>,
 				- Result<u32, TrapReason>"#;
-
 		let ret_ty = match item.clone().sig.output {
 			syn::ReturnType::Type(_, ty) => Ok(ty.clone()),
 			_ => Err(err(span, &msg)),
 		}?;
-
 		match *ret_ty {
 			syn::Type::Path(tp) => {
 				let result = &tp.path.segments.last().ok_or(err(span, &msg))?;
@@ -334,6 +351,20 @@ impl EnvDef {
 	}
 }
 
+fn is_valid_special_arg(idx: usize, arg: &FnArg) -> bool {
+	let pat = if let FnArg::Typed(pat) = arg { pat } else { return false };
+	let ident = if let syn::Pat::Ident(ref ident) = *pat.pat { &ident.ident } else { return false };
+	let name_ok = match idx {
+		0 => ident == "ctx" || ident == "_ctx",
+		1 => ident == "memory" || ident == "_memory",
+		_ => false,
+	};
+	if !name_ok {
+		return false
+	}
+	matches!(*pat.ty, syn::Type::Infer(_))
+}
+
 /// Expands environment definiton.
 /// Should generate source code for:
 ///  - wasm import satisfy checks (see `expand_can_satisfy()`);
@@ -351,23 +382,23 @@ fn expand_env(def: &mut EnvDef) -> TokenStream2 {
 /// Generates implementation for every host function, to register it in the contract execution
 /// environment.
 fn expand_impls(def: &mut EnvDef) -> TokenStream2 {
-	let impls = expand_functions(def, true, quote! { Runtime<E> });
+	let impls = expand_functions(def, true, quote! { crate::wasm::Runtime<E> });
 	let dummy_impls = expand_functions(def, false, quote! { () });
 
 	quote! {
-		impl<'a, E> crate::wasm::env_def::Environment<Runtime<'a, E>> for Env
+		impl<'a, E> crate::wasm::Environment<crate::wasm::runtime::Runtime<'a, E>> for Env
 		where
 			E: Ext,
 			<E::T as frame_system::Config>::AccountId:
 				sp_core::crypto::UncheckedFrom<<E::T as frame_system::Config>::Hash> + AsRef<[u8]>,
 		{
-			fn define(store: &mut wasmi::Store<Runtime<E>>, linker: &mut wasmi::Linker<Runtime<E>>) -> Result<(), wasmi::errors::LinkerError> {
+			fn define(store: &mut wasmi::Store<crate::wasm::Runtime<E>>, linker: &mut wasmi::Linker<crate::wasm::Runtime<E>>) -> Result<(), wasmi::errors::LinkerError> {
 				#impls
 				Ok(())
 			}
 		}
 
-		impl crate::wasm::env_def::Environment<()> for Env
+		impl crate::wasm::Environment<()> for Env
 		{
 			fn define(store: &mut wasmi::Store<()>, linker: &mut wasmi::Linker<()>) -> Result<(), wasmi::errors::LinkerError> {
 				#dummy_impls
@@ -383,11 +414,8 @@ fn expand_functions(
 	host_state: TokenStream2,
 ) -> TokenStream2 {
 	let impls = def.host_funcs.iter().map(|f| {
-		// skip the context argument
-		let params = f.item.sig.inputs.iter().skip(1);
-		let param_names = params.clone().filter_map(|p|
-			if let syn::FnArg::Typed(ty) = p { Some(&ty.pat) } else { None }
-		);
+		// skip the context and memory argument
+		let params = f.item.sig.inputs.iter().skip(2);
 		let (module, name, body, wasm_output, output) = (
 			&f.module,
 			&f.name,
@@ -399,6 +427,11 @@ fn expand_functions(
 			"__unstable__" => quote! { #[cfg(feature = "unstable-interface")] },
 			_ => quote! {},
 		};
+
+		// If we don't expand blocks (implementing for `()`) we change a few things:
+		// - We replace any code by unreachable!
+		// - Allow unused variables as the code that uses is not expanded
+		// - We don't need to map the error as we simply panic if they code would ever be executed
 		let inner = if expand_blocks {
 			quote! { || #output {
 				let (memory, ctx) = __caller__
@@ -410,7 +443,6 @@ fn expand_functions(
 			} }
 		} else {
 			quote! { || -> #wasm_output {
-				#( drop(#param_names); )*
 				unreachable!()
 			} }
 		};
@@ -425,10 +457,17 @@ fn expand_functions(
 				|reason| { reason }
 			}
 		};
+		let allow_unused =  if expand_blocks {
+			quote! { }
+		} else {
+			quote! { #[allow(unused_variables)] }
+		};
+
+
 		quote! {
 			#unstable_feat
+			#allow_unused
 			linker.define(#module, #name, wasmi::Func::wrap(&mut*store, |mut __caller__: wasmi::Caller<#host_state>, #( #params, )*| -> #wasm_output {
-				#[allow(unused_variables)]
 				let mut func = #inner;
 				func()
 					.map_err(#map_err)
@@ -454,7 +493,7 @@ fn expand_functions(
 /// ```nocompile
 /// #[define_env]
 /// pub mod some_env {
-/// 	fn some_host_fn(ctx: Runtime<E>, key_ptr: u32, value_ptr: u32, value_len: u32) -> Result<(), TrapReason> {
+/// 	fn some_host_fn(ctx: _, memory: _, key_ptr: u32, value_ptr: u32, value_len: u32) -> Result<(), TrapReason> {
 /// 		ctx.some_host_fn(KeyType::Fix, key_ptr, value_ptr, value_len).map(|_| ())
 /// 	}
 /// }
@@ -469,12 +508,12 @@ fn expand_functions(
 /// #[define_env]
 /// pub mod some_env {
 /// 	#[version(1)]
-/// 	fn some_host_fn(ctx: Runtime<E>, key_ptr: u32, value_ptr: u32, value_len: u32) -> Result<ReturnCode, TrapReason> {
+/// 	fn some_host_fn(ctx: _, memory: _, key_ptr: u32, value_ptr: u32, value_len: u32) -> Result<ReturnCode, TrapReason> {
 /// 		ctx.some_host_fn(KeyType::Fix, key_ptr, value_ptr, value_len).map(|_| ())
 /// 	}
 ///
 /// 	#[unstable]
-/// 	fn some_host_fn(ctx: Runtime<E>, key_ptr: u32, value_ptr: u32, value_len: u32) -> Result<u32, TrapReason> {
+/// 	fn some_host_fn(ctx: _, memory: _, key_ptr: u32, value_ptr: u32, value_len: u32) -> Result<u32, TrapReason> {
 /// 		ctx.some_host_fn(KeyType::Fix, key_ptr, value_ptr, value_len).map(|_| ())
 /// 	}
 /// }
@@ -492,12 +531,12 @@ fn expand_functions(
 /// pub mod some_env {
 /// 	#[version(1)]
 /// 	#[prefixed_alias]
-/// 	fn some_host_fn(ctx: Runtime<E>, key_ptr: u32, value_ptr: u32, value_len: u32) -> Result<ReturnCode, TrapReason> {
+/// 	fn some_host_fn(ctx: _, memory: _, key_ptr: u32, value_ptr: u32, value_len: u32) -> Result<ReturnCode, TrapReason> {
 /// 		ctx.some_host_fn(KeyType::Fix, key_ptr, value_ptr, value_len).map(|_| ())
 /// 	}
 ///
 /// 	#[unstable]
-/// 	fn some_host_fn(ctx: Runtime<E>, key_ptr: u32, value_ptr: u32, value_len: u32) -> Result<u32, TrapReason> {
+/// 	fn some_host_fn(ctx: _, memory: _, key_ptr: u32, value_ptr: u32, value_len: u32) -> Result<u32, TrapReason> {
 /// 		ctx.some_host_fn(KeyType::Fix, key_ptr, value_ptr, value_len).map(|_| ())
 /// 	}
 /// }
@@ -514,7 +553,11 @@ fn expand_functions(
 /// - `Result<u32, TrapReason>`.
 ///
 /// The macro expands to `pub struct Env` declaration, with the following traits implementations:
-/// - `pallet_contracts::wasm::env_def::Environment`
+/// - `pallet_contracts::wasm::Environment<Runtime<E>> where E: Ext`
+/// - `pallet_contracts::wasm::Environment<()>`
+///
+/// The implementation on `()` can be used in places where no `Ext` exists, yet. This is useful
+/// when only checking whether a code can be instantiated without actually executing any code.
 #[proc_macro_attribute]
 pub fn define_env(attr: TokenStream, item: TokenStream) -> TokenStream {
 	if !attr.is_empty() {

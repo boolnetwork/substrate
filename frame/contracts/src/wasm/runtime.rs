@@ -33,10 +33,19 @@ use sp_core::crypto::UncheckedFrom;
 use sp_io::hashing::{blake2_128, blake2_256, keccak_256, sha2_256};
 use sp_runtime::traits::{Bounded, Zero};
 use sp_std::{fmt, prelude::*};
-use wasmi::{core::HostError, Memory};
+use wasmi::{core::HostError, errors::LinkerError, Linker, Memory, Store};
 
 /// The maximum nesting depth a contract can use when encoding types.
 const MAX_DECODE_NESTING: u32 = 256;
+
+/// Trait implemented by the [`define_env`] macro for the emitted `Env` struct.
+pub trait Environment<HostState> {
+	/// Adds all declared functions to the supplied [`Linker`] and [`Store`].
+	fn define(
+		store: &mut Store<HostState>,
+		linker: &mut Linker<HostState>,
+	) -> Result<(), LinkerError>;
+}
 
 /// Type of a storage key.
 #[allow(dead_code)]
@@ -1002,7 +1011,7 @@ pub mod env {
 	/// This call is supposed to be called only by instrumentation injected code.
 	///
 	/// - amount: How much gas is used.
-	fn gas(ctx: Runtime<E>, amount: u64) -> Result<(), TrapReason> {
+	fn gas(ctx: _, _memory: _, amount: u64) -> Result<(), TrapReason> {
 		ctx.charge_gas(RuntimeCosts::MeteringBlock(amount))?;
 		Ok(())
 	}
@@ -1013,7 +1022,8 @@ pub mod env {
 	/// type. Still a valid thing to call when not interested in the return value.
 	#[prefixed_alias]
 	fn set_storage(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		key_ptr: u32,
 		value_ptr: u32,
 		value_len: u32,
@@ -1042,7 +1052,8 @@ pub mod env {
 	#[version(1)]
 	#[prefixed_alias]
 	fn set_storage(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		key_ptr: u32,
 		value_ptr: u32,
 		value_len: u32,
@@ -1069,7 +1080,8 @@ pub mod env {
 	#[unstable]
 	#[prefixed_alias]
 	fn set_storage(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		key_ptr: u32,
 		key_len: u32,
 		value_ptr: u32,
@@ -1083,7 +1095,7 @@ pub mod env {
 	/// Equivalent to the newer version of `seal_clear_storage` with the exception of the return
 	/// type. Still a valid thing to call when not interested in the return value.
 	#[prefixed_alias]
-	fn clear_storage(ctx: Runtime<E>, key_ptr: u32) -> Result<(), TrapReason> {
+	fn clear_storage(ctx: _, memory: _, key_ptr: u32) -> Result<(), TrapReason> {
 		ctx.clear_storage(memory, KeyType::Fix, key_ptr).map(|_| ())
 	}
 
@@ -1100,7 +1112,7 @@ pub mod env {
 	/// `SENTINEL` is returned as a sentinel value.
 	#[unstable]
 	#[prefixed_alias]
-	fn clear_storage(ctx: Runtime<E>, key_ptr: u32, key_len: u32) -> Result<u32, TrapReason> {
+	fn clear_storage(ctx: _, memory: _, key_ptr: u32, key_len: u32) -> Result<u32, TrapReason> {
 		ctx.clear_storage(memory, KeyType::Variable(key_len), key_ptr)
 	}
 
@@ -1121,7 +1133,8 @@ pub mod env {
 	/// `ReturnCode::KeyNotFound`
 	#[prefixed_alias]
 	fn get_storage(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		key_ptr: u32,
 		out_ptr: u32,
 		out_len_ptr: u32,
@@ -1150,7 +1163,8 @@ pub mod env {
 	#[unstable]
 	#[prefixed_alias]
 	fn get_storage(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		key_ptr: u32,
 		key_len: u32,
 		out_ptr: u32,
@@ -1173,7 +1187,7 @@ pub mod env {
 	/// Returns the size of the pre-existing value at the specified key if any. Otherwise
 	/// `SENTINEL` is returned as a sentinel value.
 	#[prefixed_alias]
-	fn contains_storage(ctx: Runtime<E>, key_ptr: u32) -> Result<u32, TrapReason> {
+	fn contains_storage(ctx: _, memory: _, key_ptr: u32) -> Result<u32, TrapReason> {
 		ctx.contains_storage(memory, KeyType::Fix, key_ptr)
 	}
 
@@ -1192,7 +1206,7 @@ pub mod env {
 	/// `SENTINEL` is returned as a sentinel value.
 	#[unstable]
 	#[prefixed_alias]
-	fn contains_storage(ctx: Runtime<E>, key_ptr: u32, key_len: u32) -> Result<u32, TrapReason> {
+	fn contains_storage(ctx: _, memory: _, key_ptr: u32, key_len: u32) -> Result<u32, TrapReason> {
 		ctx.contains_storage(memory, KeyType::Variable(key_len), key_ptr)
 	}
 
@@ -1212,7 +1226,8 @@ pub mod env {
 	#[unstable]
 	#[prefixed_alias]
 	fn take_storage(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		key_ptr: u32,
 		key_len: u32,
 		out_ptr: u32,
@@ -1249,7 +1264,8 @@ pub mod env {
 	/// `ReturnCode::TransferFailed`
 	#[prefixed_alias]
 	fn transfer(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		account_ptr: u32,
 		_account_len: u32,
 		value_ptr: u32,
@@ -1283,7 +1299,8 @@ pub mod env {
 	/// compatibility. Consider switching to the newest version of this function.
 	#[prefixed_alias]
 	fn call(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		callee_ptr: u32,
 		_callee_len: u32,
 		gas: u64,
@@ -1337,7 +1354,8 @@ pub mod env {
 	#[version(1)]
 	#[prefixed_alias]
 	fn call(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		flags: u32,
 		callee_ptr: u32,
 		gas: u64,
@@ -1384,7 +1402,8 @@ pub mod env {
 	/// `ReturnCode::CodeNotFound`
 	#[prefixed_alias]
 	fn delegate_call(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		flags: u32,
 		code_hash_ptr: u32,
 		input_data_ptr: u32,
@@ -1416,7 +1435,8 @@ pub mod env {
 	/// compatibility. Consider switching to the newest version of this function.
 	#[prefixed_alias]
 	fn instantiate(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		code_hash_ptr: u32,
 		_code_hash_len: u32,
 		gas: u64,
@@ -1490,7 +1510,8 @@ pub mod env {
 	#[version(1)]
 	#[prefixed_alias]
 	fn instantiate(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		code_hash_ptr: u32,
 		gas: u64,
 		value_ptr: u32,
@@ -1533,7 +1554,8 @@ pub mod env {
 	/// compatibility. Consider switching to the newest version of this function.
 	#[prefixed_alias]
 	fn terminate(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		beneficiary_ptr: u32,
 		_beneficiary_len: u32,
 	) -> Result<(), TrapReason> {
@@ -1557,7 +1579,7 @@ pub mod env {
 	/// - The deletion queue is full.
 	#[version(1)]
 	#[prefixed_alias]
-	fn terminate(ctx: Runtime<E>, beneficiary_ptr: u32) -> Result<(), TrapReason> {
+	fn terminate(ctx: _, memory: _, beneficiary_ptr: u32) -> Result<(), TrapReason> {
 		ctx.terminate(memory, beneficiary_ptr)
 	}
 
@@ -1572,7 +1594,7 @@ pub mod env {
 	///
 	/// This function traps if the input was previously forwarded by a `seal_call`.
 	#[prefixed_alias]
-	fn input(ctx: Runtime<E>, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
+	fn input(ctx: _, memory: _, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
 		ctx.charge_gas(RuntimeCosts::InputBase)?;
 		if let Some(input) = ctx.input_data.take() {
 			ctx.write_sandbox_output(memory, out_ptr, out_len_ptr, &input, false, |len| {
@@ -1603,7 +1625,8 @@ pub mod env {
 	///
 	/// Using a reserved bit triggers a trap.
 	fn seal_return(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		flags: u32,
 		data_ptr: u32,
 		data_len: u32,
@@ -1626,7 +1649,7 @@ pub mod env {
 	/// extrinsic will be returned. Otherwise, if this call is initiated by another contract then
 	/// the address of the contract will be returned. The value is encoded as T::AccountId.
 	#[prefixed_alias]
-	fn caller(ctx: Runtime<E>, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
+	fn caller(ctx: _, memory: _, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
 		ctx.charge_gas(RuntimeCosts::Caller)?;
 		Ok(ctx.write_sandbox_output(
 			memory,
@@ -1647,7 +1670,7 @@ pub mod env {
 	///
 	/// Returned value is a u32-encoded boolean: (0 = false, 1 = true).
 	#[prefixed_alias]
-	fn is_contract(ctx: Runtime<E>, account_ptr: u32) -> Result<u32, TrapReason> {
+	fn is_contract(ctx: _, memory: _, account_ptr: u32) -> Result<u32, TrapReason> {
 		ctx.charge_gas(RuntimeCosts::IsContract)?;
 		let address: <<E as Ext>::T as frame_system::Config>::AccountId =
 			ctx.read_sandbox_memory_as(memory, account_ptr)?;
@@ -1670,7 +1693,8 @@ pub mod env {
 	/// `ReturnCode::KeyNotFound`
 	#[prefixed_alias]
 	fn code_hash(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		account_ptr: u32,
 		out_ptr: u32,
 		out_len_ptr: u32,
@@ -1701,7 +1725,7 @@ pub mod env {
 	/// - `out_len_ptr`: in-out pointer into linear memory where the buffer length is read from and
 	///   the value length is written to.
 	#[prefixed_alias]
-	fn own_code_hash(ctx: Runtime<E>, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
+	fn own_code_hash(ctx: _, memory: _, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
 		ctx.charge_gas(RuntimeCosts::OwnCodeHash)?;
 		let code_hash_encoded = &ctx.ext.own_code_hash().encode();
 		Ok(ctx.write_sandbox_output(
@@ -1725,7 +1749,7 @@ pub mod env {
 	///
 	/// Returned value is a u32-encoded boolean: (0 = false, 1 = true).
 	#[prefixed_alias]
-	fn caller_is_origin(ctx: Runtime<E>) -> Result<u32, TrapReason> {
+	fn caller_is_origin(ctx: _, _memory: _) -> Result<u32, TrapReason> {
 		ctx.charge_gas(RuntimeCosts::CallerIsOrigin)?;
 		Ok(ctx.ext.caller_is_origin() as u32)
 	}
@@ -1737,7 +1761,7 @@ pub mod env {
 	/// `out_ptr`. This call overwrites it with the size of the value. If the available
 	/// space at `out_ptr` is less than the size of the value a trap is triggered.
 	#[prefixed_alias]
-	fn address(ctx: Runtime<E>, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
+	fn address(ctx: _, memory: _, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
 		ctx.charge_gas(RuntimeCosts::Address)?;
 		Ok(ctx.write_sandbox_output(
 			memory,
@@ -1764,7 +1788,8 @@ pub mod env {
 	/// gas can be smaller than one.
 	#[prefixed_alias]
 	fn weight_to_fee(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		gas: u64,
 		out_ptr: u32,
 		out_len_ptr: u32,
@@ -1790,7 +1815,7 @@ pub mod env {
 	///
 	/// The data is encoded as Gas.
 	#[prefixed_alias]
-	fn gas_left(ctx: Runtime<E>, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
+	fn gas_left(ctx: _, memory: _, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
 		ctx.charge_gas(RuntimeCosts::GasLeft)?;
 		let gas_left = &ctx.ext.gas_meter().gas_left().ref_time().encode();
 		Ok(ctx.write_sandbox_output(
@@ -1812,7 +1837,7 @@ pub mod env {
 	///
 	/// The data is encoded as T::Balance.
 	#[prefixed_alias]
-	fn balance(ctx: Runtime<E>, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
+	fn balance(ctx: _, memory: _, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
 		ctx.charge_gas(RuntimeCosts::Balance)?;
 		Ok(ctx.write_sandbox_output(
 			memory,
@@ -1834,7 +1859,8 @@ pub mod env {
 	/// The data is encoded as T::Balance.
 	#[prefixed_alias]
 	fn value_transferred(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		out_ptr: u32,
 		out_len_ptr: u32,
 	) -> Result<(), TrapReason> {
@@ -1863,7 +1889,8 @@ pub mod env {
 	/// This function is deprecated. Users should migrate to the version in the "seal1" module.
 	#[prefixed_alias]
 	fn random(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		subject_ptr: u32,
 		subject_len: u32,
 		out_ptr: u32,
@@ -1908,7 +1935,8 @@ pub mod env {
 	#[version(1)]
 	#[prefixed_alias]
 	fn random(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		subject_ptr: u32,
 		subject_len: u32,
 		out_ptr: u32,
@@ -1936,7 +1964,7 @@ pub mod env {
 	/// `out_ptr`. This call overwrites it with the size of the value. If the available
 	/// space at `out_ptr` is less than the size of the value a trap is triggered.
 	#[prefixed_alias]
-	fn now(ctx: Runtime<E>, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
+	fn now(ctx: _, memory: _, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
 		ctx.charge_gas(RuntimeCosts::Now)?;
 		Ok(ctx.write_sandbox_output(
 			memory,
@@ -1952,7 +1980,12 @@ pub mod env {
 	///
 	/// The data is encoded as T::Balance.
 	#[prefixed_alias]
-	fn minimum_balance(ctx: Runtime<E>, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
+	fn minimum_balance(
+		ctx: _,
+		memory: _,
+		out_ptr: u32,
+		out_len_ptr: u32,
+	) -> Result<(), TrapReason> {
 		ctx.charge_gas(RuntimeCosts::MinimumBalance)?;
 		Ok(ctx.write_sandbox_output(
 			memory,
@@ -1976,7 +2009,8 @@ pub mod env {
 	/// There is no longer a tombstone deposit. This function always returns 0.
 	#[prefixed_alias]
 	fn tombstone_deposit(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		out_ptr: u32,
 		out_len_ptr: u32,
 	) -> Result<(), TrapReason> {
@@ -2000,7 +2034,8 @@ pub mod env {
 	/// backwards compatiblity
 	#[prefixed_alias]
 	fn restore_to(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		_dest_ptr: u32,
 		_dest_len: u32,
 		_code_hash_ptr: u32,
@@ -2023,7 +2058,8 @@ pub mod env {
 	#[version(1)]
 	#[prefixed_alias]
 	fn restore_to(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		_dest_ptr: u32,
 		_code_hash_ptr: u32,
 		_rent_allowance_ptr: u32,
@@ -2044,7 +2080,8 @@ pub mod env {
 	/// - data_len - the length of the data buffer.
 	#[prefixed_alias]
 	fn deposit_event(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		topics_ptr: u32,
 		topics_len: u32,
 		data_ptr: u32,
@@ -2099,7 +2136,8 @@ pub mod env {
 	/// backwards compatiblity.
 	#[prefixed_alias]
 	fn set_rent_allowance(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		_value_ptr: u32,
 		_value_len: u32,
 	) -> Result<(), TrapReason> {
@@ -2115,7 +2153,7 @@ pub mod env {
 	/// backwards compatiblity.
 	#[version(1)]
 	#[prefixed_alias]
-	fn set_rent_allowance(ctx: Runtime<E>, _value_ptr: u32) -> Result<(), TrapReason> {
+	fn set_rent_allowance(ctx: _, _memory: _, _value_ptr: u32) -> Result<(), TrapReason> {
 		ctx.charge_gas(RuntimeCosts::DebugMessage)?;
 		Ok(())
 	}
@@ -2127,7 +2165,7 @@ pub mod env {
 	/// The state rent functionality was removed. This is stub only exists for
 	/// backwards compatiblity.
 	#[prefixed_alias]
-	fn rent_allowance(ctx: Runtime<E>, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
+	fn rent_allowance(ctx: _, memory: _, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
 		ctx.charge_gas(RuntimeCosts::Balance)?;
 		let rent_allowance = <BalanceOf<E::T>>::max_value().encode();
 		Ok(ctx.write_sandbox_output(
@@ -2147,7 +2185,7 @@ pub mod env {
 	/// `out_ptr`. This call overwrites it with the size of the value. If the available
 	/// space at `out_ptr` is less than the size of the value a trap is triggered.
 	#[prefixed_alias]
-	fn block_number(ctx: Runtime<E>, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
+	fn block_number(ctx: _, memory: _, out_ptr: u32, out_len_ptr: u32) -> Result<(), TrapReason> {
 		ctx.charge_gas(RuntimeCosts::BlockNumber)?;
 		Ok(ctx.write_sandbox_output(
 			memory,
@@ -2178,7 +2216,8 @@ pub mod env {
 	///   function will write the result directly into this buffer.
 	#[prefixed_alias]
 	fn hash_sha2_256(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		input_ptr: u32,
 		input_len: u32,
 		output_ptr: u32,
@@ -2208,7 +2247,8 @@ pub mod env {
 	///   function will write the result directly into this buffer.
 	#[prefixed_alias]
 	fn hash_keccak_256(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		input_ptr: u32,
 		input_len: u32,
 		output_ptr: u32,
@@ -2238,7 +2278,8 @@ pub mod env {
 	///   function will write the result directly into this buffer.
 	#[prefixed_alias]
 	fn hash_blake2_256(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		input_ptr: u32,
 		input_len: u32,
 		output_ptr: u32,
@@ -2268,7 +2309,8 @@ pub mod env {
 	///   function will write the result directly into this buffer.
 	#[prefixed_alias]
 	fn hash_blake2_128(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		input_ptr: u32,
 		input_len: u32,
 		output_ptr: u32,
@@ -2292,7 +2334,8 @@ pub mod env {
 	/// module error.
 	#[prefixed_alias]
 	fn call_chain_extension(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		id: u32,
 		input_ptr: u32,
 		input_len: u32,
@@ -2337,7 +2380,8 @@ pub mod env {
 	/// return value of this function can be cached in order to prevent further calls at runtime.
 	#[prefixed_alias]
 	fn debug_message(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		str_ptr: u32,
 		str_len: u32,
 	) -> Result<ReturnCode, TrapReason> {
@@ -2392,7 +2436,8 @@ pub mod env {
 	#[unstable]
 	#[prefixed_alias]
 	fn call_runtime(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		call_ptr: u32,
 		call_len: u32,
 	) -> Result<ReturnCode, TrapReason> {
@@ -2430,7 +2475,8 @@ pub mod env {
 	/// `ReturnCode::EcdsaRecoverFailed`
 	#[prefixed_alias]
 	fn ecdsa_recover(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		signature_ptr: u32,
 		message_hash_ptr: u32,
 		output_ptr: u32,
@@ -2483,7 +2529,7 @@ pub mod env {
 	///
 	/// `ReturnCode::CodeNotFound`
 	#[prefixed_alias]
-	fn set_code_hash(ctx: Runtime<E>, code_hash_ptr: u32) -> Result<ReturnCode, TrapReason> {
+	fn set_code_hash(ctx: _, memory: _, code_hash_ptr: u32) -> Result<ReturnCode, TrapReason> {
 		ctx.charge_gas(RuntimeCosts::SetCodeHash)?;
 		let code_hash: CodeHash<<E as Ext>::T> =
 			ctx.read_sandbox_memory_as(memory, code_hash_ptr)?;
@@ -2514,7 +2560,8 @@ pub mod env {
 	/// `ReturnCode::EcdsaRecoverFailed`
 	#[prefixed_alias]
 	fn ecdsa_to_eth_address(
-		ctx: Runtime<E>,
+		ctx: _,
+		memory: _,
 		key_ptr: u32,
 		out_ptr: u32,
 	) -> Result<ReturnCode, TrapReason> {
