@@ -1103,10 +1103,10 @@ decl_storage! {
         /// This is set to v5.0.0 for new networks.
         StorageVersion build(|_: &GenesisConfig<T>| Releases::V5_0_0): Releases;
 
-        /// Rewrds for the account, contains (total_rewards, paid_rewards, unpaid_era_index)
+        /// Rewrds for the account, contains (total_rewards, paid_rewards, Vec<(unpaid_era_index, unpaid_rewards_at_index)>)
         ///
         /// Update at era_payout and rewards_payout
-        RewardsInfoForAccount get(fn rewards_info_for_account): map hasher(twox_64_concat) T::AccountId => (BalanceOf<T>, BalanceOf<T>, Vec<EraIndex>);
+        RewardsInfoForAccount get(fn rewards_info_for_account): map hasher(twox_64_concat) T::AccountId => (BalanceOf<T>, BalanceOf<T>, Vec<(EraIndex, BalanceOf<T>)>);
     }
     add_extra_genesis {
         config(stakers):
@@ -2445,12 +2445,10 @@ impl<T: Config> Module<T> {
         }
         <RewardsInfoForAccount<T>>::mutate(&ledger.stash, |v| {
             v.1 += validator_staking_payout + validator_commission_payout;
-            if v.2.contains(&era) {
-                for i in 0..v.2.len() {
-                    if v.2[i] == era {
-                        v.2.remove(i);
-                        break;
-                    }
+            for i in 0..v.2.len() {
+                if v.2[i].0 == era {
+                    v.2.remove(i);
+                    break;
                 }
             }
         });
@@ -2468,12 +2466,13 @@ impl<T: Config> Module<T> {
             }
             <RewardsInfoForAccount<T>>::mutate(&nominator.who, |v| {
                 v.1 += nominator_reward;
-                if v.2.contains(&era) {
-                    for i in 0..v.2.len() {
-                        if v.2[i] == era {
+                for i in 0..v.2.len() {
+                    if v.2[i].0 == era {
+                        v.2[i].1 -= nominator_reward;
+                        if v.2[i].1 == Zero::zero() {
                             v.2.remove(i);
-                            break;
                         }
+                        break;
                     }
                 }
             });
@@ -2925,14 +2924,24 @@ impl<T: Config> Module<T> {
                 let validator_exposure_part =
                     Perbill::from_rational_approximation(exposure.own, exposure.total);
                 let validator_staking_payout = validator_exposure_part * validator_leftover_payout;
+                let depth = Self::history_depth();
                 // change validator's rewards info
                 if validator_staking_payout + validator_commission_payout > Zero::zero() {
-                    <RewardsInfoForAccount<T>>::mutate(validator, |v| {
-                        v.0 += validator_staking_payout + validator_commission_payout;
-                        if !v.2.contains(&active_era.index) {
-                            v.2.push(active_era.index);
+                    let mut rewards_info = <RewardsInfoForAccount<T>>::get(&validator);
+                    rewards_info.0 += validator_staking_payout + validator_commission_payout;
+                    rewards_info.2.push((active_era.index, validator_staking_payout + validator_commission_payout));
+                    // check invalid rewards era index
+                    let mut remove_rewards = Zero::zero();
+                    rewards_info.2.retain(|index_and_reward|
+                        if index_and_reward.0 < active_era.index.saturating_sub(depth) {
+                            remove_rewards += index_and_reward.1;
+                            false
+                        } else {
+                            true
                         }
-                    });
+                    );
+                    rewards_info.0 -= remove_rewards;
+                    <RewardsInfoForAccount<T>>::insert(&validator, rewards_info);
                 }
                 // Lets now calculate how this is split to the nominators.
                 // Reward only the clipped exposures. Note this is not necessarily sorted.
@@ -2944,12 +2953,30 @@ impl<T: Config> Module<T> {
                         nominator_exposure_part * validator_leftover_payout;
                     // change nominator's rewards about the validator
                     if nominator_reward > Zero::zero() {
-                        <RewardsInfoForAccount<T>>::mutate(&nominator.who, |v| {
-                            v.0 += nominator_reward;
-                            if !v.2.contains(&active_era.index) {
-                                v.2.push(active_era.index);
+                        let mut rewards_info = <RewardsInfoForAccount<T>>::get(&nominator.who);
+                        rewards_info.0 += nominator_reward;
+                        if rewards_info.2.iter().any(|v| v.0 == active_era.index) {
+                            for i in 0..rewards_info.2.len() {
+                                if rewards_info.2[i].0 == active_era.index {
+                                    rewards_info.2[i].1 += nominator_reward;
+                                    break;
+                                }
                             }
-                        });
+                        } else {
+                            rewards_info.2.push((active_era.index, nominator_reward));
+                        }
+                        // check invalid rewards era index
+                        let mut remove_rewards = Zero::zero();
+                        rewards_info.2.retain(|index_and_reward|
+                            if index_and_reward.0 < active_era.index.saturating_sub(depth) {
+                                remove_rewards += index_and_reward.1;
+                                false
+                            } else {
+                                true
+                            }
+                        );
+                        rewards_info.0 -= remove_rewards;
+                        <RewardsInfoForAccount<T>>::insert(&nominator.who, rewards_info);
                     }
                 }
             }
