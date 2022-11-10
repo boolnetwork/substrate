@@ -1587,7 +1587,6 @@ impl<B: BlockT> ChainSync<B> {
 				let justification = block_data
 					.block
 					.justification;
-					// .or_else(|| legacy_justification_mapping(block_data.block.justification));
 				IncomingBlock {
 					hash: block_data.block.hash,
 					header: block_data.block.header,
@@ -1624,17 +1623,6 @@ pub(crate) struct Metrics {
 	pub(crate) justifications: extra_requests::Metrics,
 	_priv: ()
 }
-
-// // This is purely during a backwards compatible transitionary period and should be removed
-// // once we can assume all nodes can send and receive multiple Justifications
-// // The ID tag is hardcoded here to avoid depending on the GRANDPA crate.
-// // See: https://github.com/paritytech/substrate/issues/8172
-// fn legacy_justification_mapping(
-//     justification: Option<Justification>,
-// ) -> Option<Justification> {
-//     justification.map(|just| (*b"FRNK", just).into())
-// }
-
 
 /// Request the ancestry for a block. Sends a request for header and justification for the given
 /// block number. Used during ancestry search.
