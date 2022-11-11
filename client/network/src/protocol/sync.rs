@@ -1059,6 +1059,7 @@ impl<B: BlockT> ChainSync<B> {
 		let mut has_error = false;
 		for (_, hash) in &results {
 			self.queue_blocks.remove(&hash);
+			self.blocks.clear_queued(hash);
 		}
 		for (result, hash) in results {
 			if has_error {
