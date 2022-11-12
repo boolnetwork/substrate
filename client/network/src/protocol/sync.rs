@@ -37,7 +37,7 @@ use sp_consensus::{BlockOrigin, BlockStatus,
 	import_queue::{IncomingBlock, BlockImportResult, BlockImportError}
 };
 use crate::protocol::message::{
-	self, BlockAnnounce, BlockAttributes, BlockRequest, BlockResponse, Roles,
+	self, BlockAnnounce, BlockAttributes, BlockRequest, BlockResponse, Roles, Direction, FromBlock, BlockData
 };
 use either::Either;
 use extra_requests::ExtraRequests;
@@ -209,6 +209,9 @@ pub struct ChainSync<B: BlockT> {
 	>,
 	/// Stats per peer about the number of concurrent block announce validations.
 	block_announce_validation_per_peer_stats: HashMap<PeerId, usize>,
+	/// Enable importing existing blocks. This is used used after the state download to
+	/// catch up to the latest state while re-importing blocks.
+	import_existing: bool,
 }
 
 /// All the data we have about a Peer that we are trying to sync with
@@ -471,6 +474,7 @@ impl<B: BlockT> ChainSync<B> {
 			downloaded_blocks: 0,
 			block_announce_validation: Default::default(),
 			block_announce_validation_per_peer_stats: Default::default(),
+			import_existing: false,
 		}
 	}
 
@@ -813,27 +817,16 @@ impl<B: BlockT> ChainSync<B> {
 				self.pending_requests.add(who);
 				if let Some(request) = request {
 					match &mut peer.state {
-						PeerSyncState::DownloadingNew(start_block) => {
+						PeerSyncState::DownloadingNew(_) => {
 							self.blocks.clear_peer_download(who);
-							let start_block = *start_block;
 							peer.state = PeerSyncState::Available;
-							validate_blocks::<B>(&blocks, who, Some(request))?;
-							self.blocks.insert(start_block, blocks, who.clone());
-							self.blocks
-								.drain(self.best_queued_number + One::one())
-								.into_iter()
-								.map(|block_data| {
-									IncomingBlock {
-										hash: block_data.block.hash,
-										header: block_data.block.header,
-										body: block_data.block.body,
-										justification: block_data.block.justification,
-										origin: block_data.origin,
-										allow_missing_state: true,
-										import_existing: false,
-									}
-								}).collect()
-						}
+							if let Some(start_block) =
+							validate_blocks::<B>(&blocks, who, Some(request))?
+							{
+								self.blocks.insert(start_block, blocks, *who);
+							}
+							self.ready_blocks()
+						},
 						PeerSyncState::DownloadingStale(_) => {
 							peer.state = PeerSyncState::Available;
 							if blocks.is_empty() {
@@ -852,7 +845,7 @@ impl<B: BlockT> ChainSync<B> {
 									import_existing: false,
 								}
 							}).collect()
-						}
+						},
 						PeerSyncState::AncestorSearch { current, start, state } => {
 							let matching_hash = match (blocks.get(0), self.client.hash(*current)) {
 								(Some(block), Ok(maybe_our_block_hash)) => {
@@ -1066,6 +1059,7 @@ impl<B: BlockT> ChainSync<B> {
 		let mut has_error = false;
 		for (_, hash) in &results {
 			self.queue_blocks.remove(&hash);
+			self.blocks.clear_queued(hash);
 		}
 		for (result, hash) in results {
 			if has_error {
@@ -1585,6 +1579,32 @@ impl<B: BlockT> ChainSync<B> {
 		self.peers.iter().any(|(_, p)| p.state == PeerSyncState::DownloadingStale(*hash))
 	}
 
+	/// Get the set of downloaded blocks that are ready to be queued for import.
+	fn ready_blocks(&mut self) -> Vec<IncomingBlock<B>> {
+		self.blocks
+			.ready_blocks(self.best_queued_number + One::one())
+			.into_iter()
+			.map(|block_data| {
+				let justification = block_data
+					.block
+					.justification;
+				IncomingBlock {
+					hash: block_data.block.hash,
+					header: block_data.block.header,
+					body: block_data.block.body,
+					// indexed_body: block_data.block.indexed_body,
+					justification,
+					origin: block_data.origin,
+					allow_missing_state: true,
+					import_existing: self.import_existing,
+					// skip_execution: self.skip_execution(),
+
+					// state: None,
+				}
+			})
+			.collect()
+	}
+
 	/// Return some key metrics.
 	pub(crate) fn metrics(&self) -> Metrics {
 		use std::convert::TryInto;
@@ -1790,13 +1810,14 @@ fn is_descendent_of<Block, T>(client: &T, base: &Block::Hash, block: &Block::Has
 }
 
 /// Validate that the given `blocks` are correct.
+/// Returns the number of the first block in the sequence.
 ///
-/// It is expected that `blocks` are in asending order.
+/// It is expected that `blocks` are in ascending order.
 fn validate_blocks<Block: BlockT>(
-	blocks: &Vec<message::BlockData<Block>>,
+	blocks: &Vec<BlockData<Block>>,
 	who: &PeerId,
 	request: Option<BlockRequest<Block>>,
-) -> Result<(), BadPeer> {
+) -> Result<Option<NumberFor<Block>>, BadPeer> {
 	if let Some(request) = request {
 		if Some(blocks.len() as _) > request.max {
 			debug!(
@@ -1807,20 +1828,17 @@ fn validate_blocks<Block: BlockT>(
 				blocks.len(),
 			);
 
-			return Err(BadPeer(who.clone(), rep::NOT_REQUESTED))
+			return Err(BadPeer(*who, rep::NOT_REQUESTED))
 		}
 
-		let block_header = if request.direction == message::Direction::Descending {
-			blocks.last()
-		} else {
-			blocks.first()
-		}.and_then(|b| b.header.as_ref());
+		let block_header =
+			if request.direction == Direction::Descending { blocks.last() } else { blocks.first() }
+				.and_then(|b| b.header.as_ref());
 
-		let expected_block = block_header.as_ref()
-			.map_or(false, |h| match request.from {
-				message::FromBlock::Hash(hash) => h.hash() == hash,
-				message::FromBlock::Number(n) => h.number() == &n,
-			});
+		let expected_block = block_header.as_ref().map_or(false, |h| match request.from {
+			FromBlock::Hash(hash) => h.hash() == hash,
+			FromBlock::Number(n) => h.number() == &n,
+		});
 
 		if !expected_block {
 			debug!(
@@ -1830,11 +1848,11 @@ fn validate_blocks<Block: BlockT>(
 				block_header,
 			);
 
-			return Err(BadPeer(who.clone(), rep::NOT_REQUESTED))
+			return Err(BadPeer(*who, rep::NOT_REQUESTED))
 		}
 
-		if request.fields.contains(message::BlockAttributes::HEADER)
-			&& blocks.iter().any(|b| b.header.is_none())
+		if request.fields.contains(BlockAttributes::HEADER) &&
+			blocks.iter().any(|b| b.header.is_none())
 		{
 			trace!(
 				target: "sync",
@@ -1842,11 +1860,10 @@ fn validate_blocks<Block: BlockT>(
 				who,
 			);
 
-			return Err(BadPeer(who.clone(), rep::BAD_RESPONSE))
+			return Err(BadPeer(*who, rep::BAD_RESPONSE))
 		}
 
-		if request.fields.contains(message::BlockAttributes::BODY)
-			&& blocks.iter().any(|b| b.body.is_none())
+		if request.fields.contains(BlockAttributes::BODY) && blocks.iter().any(|b| b.body.is_none())
 		{
 			trace!(
 				target: "sync",
@@ -1854,7 +1871,7 @@ fn validate_blocks<Block: BlockT>(
 				who,
 			);
 
-			return Err(BadPeer(who.clone(), rep::BAD_RESPONSE))
+			return Err(BadPeer(*who, rep::BAD_RESPONSE))
 		}
 	}
 
@@ -1869,12 +1886,14 @@ fn validate_blocks<Block: BlockT>(
 					b.hash,
 					hash,
 				);
-				return Err(BadPeer(who.clone(), rep::BAD_BLOCK))
+				return Err(BadPeer(*who, rep::BAD_BLOCK))
 			}
 		}
 		if let (Some(header), Some(body)) = (&b.header, &b.body) {
 			let expected = *header.extrinsics_root();
-			let got = HashFor::<Block>::ordered_trie_root(body.iter().map(Encode::encode).collect());
+			let got = HashFor::<Block>::ordered_trie_root(
+				body.iter().map(Encode::encode).collect()
+			);
 			if expected != got {
 				debug!(
 					target:"sync",
@@ -1884,12 +1903,12 @@ fn validate_blocks<Block: BlockT>(
 					expected,
 					got,
 				);
-				return Err(BadPeer(who.clone(), rep::BAD_BLOCK))
+				return Err(BadPeer(*who, rep::BAD_BLOCK))
 			}
 		}
 	}
 
-	Ok(())
+	Ok(blocks.first().and_then(|b| b.header.as_ref()).map(|h| *h.number()))
 }
 
 #[cfg(test)]

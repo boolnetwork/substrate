@@ -40,6 +40,7 @@ enum BlockRangeState<B: BlockT> {
 		downloading: u32,
 	},
 	Complete(Vec<BlockData<B>>),
+	Queued { len: NumberFor<B> },
 }
 
 impl<B: BlockT> BlockRangeState<B> {
@@ -47,6 +48,7 @@ impl<B: BlockT> BlockRangeState<B> {
 		match *self {
 			BlockRangeState::Downloading { len, .. } => len,
 			BlockRangeState::Complete(ref blocks) => (blocks.len() as u32).into(),
+			BlockRangeState::Queued { len } => len,
 		}
 	}
 }
@@ -57,14 +59,18 @@ pub struct BlockCollection<B: BlockT> {
 	/// Downloaded blocks.
 	blocks: BTreeMap<NumberFor<B>, BlockRangeState<B>>,
 	peer_requests: HashMap<PeerId, NumberFor<B>>,
+	/// Block ranges downloaded and queued for import.
+	/// Maps start_hash => (start_num, end_num).
+	queued_blocks: HashMap<B::Hash, (NumberFor<B>, NumberFor<B>)>,
 }
 
 impl<B: BlockT> BlockCollection<B> {
 	/// Create a new instance.
 	pub fn new() -> Self {
-		BlockCollection {
+		Self {
 			blocks: BTreeMap::new(),
 			peer_requests: HashMap::new(),
+			queued_blocks: HashMap::new(),
 		}
 	}
 
@@ -160,29 +166,49 @@ impl<B: BlockT> BlockCollection<B> {
 		Some(range)
 	}
 
-	/// Get a valid chain of blocks ordered in descending order and ready for importing into blockchain.
-	pub fn drain(&mut self, from: NumberFor<B>) -> Vec<BlockData<B>> {
-		let mut drained = Vec::new();
-		let mut ranges = Vec::new();
+	/// Get a valid chain of blocks ordered in descending order and ready for importing into
+	/// the blockchain.
+	/// `from` is the maximum block number for the start of the range that we are interested in.
+	/// The function will return empty Vec if the first block ready is higher than `from`.
+	/// For each returned block hash `clear_queued` must be called at some later stage.
+	pub fn ready_blocks(&mut self, from: NumberFor<B>) -> Vec<BlockData<B>> {
+		let mut ready = Vec::new();
 
 		let mut prev = from;
-		for (start, range_data) in &mut self.blocks {
-			match range_data {
-				BlockRangeState::Complete(blocks) if *start <= prev => {
-					prev = *start + (blocks.len() as u32).into();
-					// Remove all elements from `blocks` and add them to `drained`
-					drained.append(blocks);
-					ranges.push(*start);
-				},
-				_ => break,
+		for (&start, range_data) in &mut self.blocks {
+			if start > prev {
+				break
 			}
+			let len = match range_data {
+				BlockRangeState::Complete(blocks) => {
+					let len = (blocks.len() as u32).into();
+					prev = start + len;
+					if let Some(BlockData { block, .. }) = blocks.first() {
+						self.queued_blocks
+							.insert(block.hash, (start, start + (blocks.len() as u32).into()));
+					}
+					// Remove all elements from `blocks` and add them to `ready`
+					ready.append(blocks);
+					len
+				},
+				BlockRangeState::Queued { .. } => continue,
+				_ => break,
+			};
+			*range_data = BlockRangeState::Queued { len };
 		}
+		trace!(target: "sync", "{} blocks ready for import", ready.len());
+		ready
+	}
 
-		for r in ranges {
-			self.blocks.remove(&r);
+	pub fn clear_queued(&mut self, hash: &B::Hash) {
+		if let Some((from, to)) = self.queued_blocks.remove(hash) {
+			let mut block_num = from;
+			while block_num < to {
+				self.blocks.remove(&block_num);
+				block_num += One::one();
+			}
+			trace!(target: "sync", "Cleared blocks from {:?} to {:?}", from, to);
 		}
-		trace!(target: "sync", "Drained {} blocks", drained.len());
-		drained
 	}
 
 	pub fn clear_peer_download(&mut self, who: &PeerId) {
