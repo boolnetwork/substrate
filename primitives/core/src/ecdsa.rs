@@ -40,7 +40,7 @@ use serde::{de, Serializer, Serialize, Deserializer, Deserialize};
 use crate::crypto::{Public as TraitPublic, CryptoTypePublicPair, UncheckedFrom, CryptoType, Derive, CryptoTypeId};
 use sp_runtime_interface::pass_by::PassByInner;
 #[cfg(feature = "full_crypto")]
-use secp256k1::{PublicKey, SecretKey};
+pub use secp256k1::{PublicKey, SecretKey};
 
 /// An identifier used to match public keys against ecdsa keys
 pub const CRYPTO_ID: CryptoTypeId = CryptoTypeId(*b"ecds");
