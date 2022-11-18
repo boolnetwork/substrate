@@ -37,6 +37,7 @@ sp-keystore = { version = "0.9.0", path = "../../primitives/keystore" }
 sc-service = { version = "0.9.0", default-features = false, path = "../service" }
 sc-telemetry = { version = "3.0.0", path = "../telemetry" }
 sp-keyring = { version = "3.0.0", path = "../../primitives/keyring" }
+sp-io = { version = "3.0.0", path = "../../primitives/io" }
 names = "0.11.0"
 structopt = "0.3.8"
 sc-tracing = { version = "3.0.0", path = "../tracing" }

@@ -33,6 +33,7 @@ mod inspect_node_key;
 mod inspect_key;
 mod key;
 pub mod utils;
+mod identity;
 
 pub use self::{
 	build_spec_cmd::BuildSpecCmd,
@@ -52,4 +53,5 @@ pub use self::{
 	verify::VerifyCmd,
 	revert_cmd::RevertCmd,
 	run_cmd::RunCmd,
+	identity::IdentitySubcommand,
 };
