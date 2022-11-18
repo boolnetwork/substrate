@@ -6645,6 +6645,7 @@ dependencies = [
  "serde_json",
  "sp-blockchain",
  "sp-core",
+ "sp-io",
  "sp-keyring",
  "sp-keystore",
  "sp-panic-handler",
