@@ -23,7 +23,7 @@ impl IdentitySubcommand {
                 let public_key = "0x".to_string() + &hex::encode(&compress_pk);
                 let secret_seed = "0x".to_string() + & &hex::encode(&seed);
                 println!(
-                    "Secret seed:      {}\n  \
+                    "  Secret seed:      {}\n  \
 					Public key (hex): {}\n  \
 					Account ID:       {}",
                     secret_seed,
