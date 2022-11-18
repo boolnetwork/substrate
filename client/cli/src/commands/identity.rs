@@ -8,14 +8,14 @@ use structopt::StructOpt;
 pub enum IdentitySubcommand {
     /// Generate a new identity for bool-network with ETH format
     /// Return params contains Seed, Pubkey, AccountId
-    IdentityGenerate,
+    Generate,
 }
 
 impl IdentitySubcommand {
     /// run the key subcommands
     pub fn run(&self) -> Result<(), Error> {
         match self {
-            IdentitySubcommand::IdentityGenerate => {
+            IdentitySubcommand::Generate => {
                 let (pair, seed): (sp_core::ecdsa::Pair, [u8; 32]) = Pair::generate();
                 let compress_pk = pair.public().0;
                 let pk = PublicKey::parse_compressed(&compress_pk).map_err(|e| Error::Input(e.to_string()))?.serialize();
