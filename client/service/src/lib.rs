@@ -412,6 +412,7 @@ where
 		config.rpc_cors.as_ref(),
 		max_request_size,
 		http_max_response_size,
+		config.rpc_ws_max_connections,
 		metrics.clone(),
 		gen_rpc_module(deny_unsafe(http_addr, &config.rpc_methods))?,
 		config.tokio_handle.clone(),

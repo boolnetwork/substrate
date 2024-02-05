@@ -86,6 +86,7 @@ pub async fn start_http<M: Send + Sync + 'static>(
 	cors: Option<&Vec<String>>,
 	max_payload_in_mb: Option<usize>,
 	max_payload_out_mb: Option<usize>,
+	max_connections: Option<usize>,
 	metrics: Option<RpcMetrics>,
 	rpc_api: RpcModule<M>,
 	rt: tokio::runtime::Handle,
@@ -99,10 +100,12 @@ pub async fn start_http<M: Send + Sync + 'static>(
 		.layer(ProxyGetRequestLayer::new("/health", "system_health")?)
 		.layer(try_into_cors(cors)?);
 
+	let max_conns = max_connections.unwrap_or(WS_MAX_CONNECTIONS) as u32;
 	let builder = ServerBuilder::new()
 		.max_request_body_size(max_payload_in)
 		.max_response_body_size(max_payload_out)
 		.set_host_filtering(host_filter)
+		.max_connections(max_conns)
 		.set_middleware(middleware)
 		.custom_tokio_runtime(rt)
 		.http_only();
